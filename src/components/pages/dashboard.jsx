@@ -21,58 +21,32 @@ import {
 } from "lucide-react";
 import { apiClient } from "../../lib/api";
 
-/** Safely format any number-like value */
+/** Format numbers safely */
 const fmtNum = (v) => {
   const n = Number(v ?? 0);
   return Number.isFinite(n) ? n.toLocaleString() : "0";
 };
 
-/** Normalize stats object coming from various backend shapes */
-const normalizeStats = (raw = {}) => {
-  const totalBooks =
-    raw.totalBooks ?? raw.books ?? raw.total ?? raw.countBooks ?? 0;
-
-  const totalMembers = raw.totalMembers ?? raw.members ?? raw.countMembers ?? 0;
-
-  // Your UI expects "activeLoans"
-  const activeLoans =
-    raw.activeLoans ?? raw.activeBorrows ?? raw.active ?? raw.loans ?? 0;
-
-  const overdueBooks = raw.overdueBooks ?? raw.overdue ?? raw.overdueCount ?? 0;
-
-  return {
-    totalBooks: Number(totalBooks) || 0,
-    totalMembers: Number(totalMembers) || 0,
-    activeLoans: Number(activeLoans) || 0,
-    overdueBooks: Number(overdueBooks) || 0,
-  };
-};
-
-/** Normalize transactions array to { id, memberName, bookTitle, action, date, status } */
+/** Normalize transactions */
 const normalizeTransactions = (arr = []) => {
   return arr.map((t, idx) => {
-    // Prefer explicit fields if present
     const id = t.id ?? t.transactionId ?? idx + 1;
     const memberName = t.memberName ?? t.member?.name ?? "Unknown Member";
     const bookTitle = t.bookTitle ?? t.book?.title ?? "Unknown Book";
 
-    // Dates: prefer "date"; fallback to borrowDate
     const rawDate =
       t.date ?? t.borrowDate ?? t.createdAt ?? new Date().toISOString();
 
-    // Decide action/status from available info
     let action = t.action;
     let status = t.status;
 
     if (!action) {
-      // Derive action from status or presence of return date
       if (t.returnDate || /returned/i.test(status ?? "")) action = "Returned";
       else if (t.renewedDate || /renew/i.test(status ?? "")) action = "Renewed";
       else action = "Borrowed";
     }
 
     if (!status) {
-      // Decide overdue if dueDate < now and not returned
       let derivedStatus = "Active";
       const due = t.dueDate ? new Date(t.dueDate) : null;
       const returned = !!t.returnDate;
@@ -84,18 +58,10 @@ const normalizeTransactions = (arr = []) => {
       status = derivedStatus;
     }
 
-    return {
-      id,
-      memberName,
-      bookTitle,
-      action,
-      date: rawDate,
-      status,
-    };
+    return { id, memberName, bookTitle, action, date: rawDate, status };
   });
 };
 
-/** Helpers for badges */
 const getStatusColor = (status) => {
   switch (status) {
     case "Active":
@@ -138,44 +104,21 @@ export function DashboardPage() {
 
   const loadDashboardData = async () => {
     try {
-      const [statsData, transactionsData] = await Promise.all([
-        apiClient.getDashboardStats().catch(() => ({
-          totalBooks: 1247,
-          totalMembers: 342,
-          activeLoans: 89, // we store activeLoans in state
-          overdueBooks: 12,
-        })),
-        apiClient.getRecentTransactions().catch(() => [
-          {
-            id: 1,
-            memberName: "John Doe",
-            bookTitle: "The Great Gatsby",
-            action: "Borrowed",
-            date: "2024-01-15",
-            status: "Active",
-          },
-          {
-            id: 2,
-            memberName: "Jane Smith",
-            bookTitle: "To Kill a Mockingbird",
-            action: "Returned",
-            date: "2024-01-14",
-            status: "Completed",
-          },
-          {
-            id: 3,
-            memberName: "Mike Johnson",
-            bookTitle: "1984",
-            action: "Borrowed",
-            date: "2024-01-13",
-            status: "Overdue",
-          },
-        ]),
+      // Fetch raw data from backend
+      const [books, members, borrows] = await Promise.all([
+        apiClient.getBooks().catch(() => []),
+        apiClient.getMembers().catch(() => []),
+        apiClient.getTransactions().catch(() => []),
       ]);
 
-      // Normalize both payloads to what the UI expects
-      setStats(normalizeStats(statsData));
-      setRecentTransactions(normalizeTransactions(transactionsData));
+      // Calculate stats manually
+      const totalBooks = books.length;
+      const totalMembers = members.length;
+      const activeLoans = borrows.filter((b) => b.status === "Active").length;
+      const overdueBooks = borrows.filter((b) => b.status === "Overdue").length;
+
+      setStats({ totalBooks, totalMembers, activeLoans, overdueBooks });
+      setRecentTransactions(normalizeTransactions(borrows.slice(0, 10)));
     } catch (error) {
       console.error("Failed to load dashboard data:", error);
     } finally {
@@ -246,9 +189,6 @@ export function DashboardPage() {
             <div className="text-2xl font-bold text-gray-900">
               {fmtNum(stats.totalBooks)}
             </div>
-            <p className="text-xs text-gray-600">
-              <span className="text-green-600">+12%</span> from last month
-            </p>
           </CardContent>
         </Card>
 
@@ -265,9 +205,6 @@ export function DashboardPage() {
             <div className="text-2xl font-bold text-gray-900">
               {fmtNum(stats.totalMembers)}
             </div>
-            <p className="text-xs text-gray-600">
-              <span className="text-green-600">+8%</span> from last month
-            </p>
           </CardContent>
         </Card>
 
@@ -284,9 +221,6 @@ export function DashboardPage() {
             <div className="text-2xl font-bold text-gray-900">
               {fmtNum(stats.activeLoans)}
             </div>
-            <p className="text-xs text-gray-600">
-              <span className="text-blue-600">+5%</span> from last week
-            </p>
           </CardContent>
         </Card>
 
@@ -303,9 +237,6 @@ export function DashboardPage() {
             <div className="text-2xl font-bold text-gray-900">
               {fmtNum(stats.overdueBooks)}
             </div>
-            <p className="text-xs text-gray-600">
-              <span className="text-red-600">+2</span> from yesterday
-            </p>
           </CardContent>
         </Card>
       </div>
@@ -343,7 +274,7 @@ export function DashboardPage() {
         </CardContent>
       </Card>
 
-      {/* Recent Activity */}
+      {/* Recent Transactions */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="border-0 shadow-lg">
           <CardHeader className="flex flex-row items-center justify-between">
@@ -367,16 +298,13 @@ export function DashboardPage() {
           <CardContent>
             <div className="space-y-4">
               {recentTransactions.map((transaction) => {
-                // Safe date formatting
                 let dateStr = "—";
                 try {
                   const d = new Date(transaction.date);
                   if (!isNaN(d.getTime())) {
                     dateStr = d.toLocaleDateString();
                   }
-                } catch {
-                  /* ignore */
-                }
+                } catch {}
 
                 return (
                   <div
